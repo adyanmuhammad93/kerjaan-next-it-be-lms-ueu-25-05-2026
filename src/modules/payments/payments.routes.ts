@@ -51,6 +51,36 @@ type NormalizedTransactionItem = {
   price_currency?: number;
   title?: string;
 };
+type TransactionColumnSupport = {
+  currency_code: boolean;
+  total_amount_currency: boolean;
+  fx_rate_usd_idr: boolean;
+};
+
+let transactionColumnSupportCache: TransactionColumnSupport | null = null;
+
+async function getTransactionColumnSupport(trx: any): Promise<TransactionColumnSupport> {
+  if (transactionColumnSupportCache) return transactionColumnSupportCache;
+  const [currency_code, total_amount_currency, fx_rate_usd_idr] = await Promise.all([
+    trx.schema.hasColumn('transactions', 'currency_code'),
+    trx.schema.hasColumn('transactions', 'total_amount_currency'),
+    trx.schema.hasColumn('transactions', 'fx_rate_usd_idr'),
+  ]);
+  transactionColumnSupportCache = { currency_code, total_amount_currency, fx_rate_usd_idr };
+  return transactionColumnSupportCache;
+}
+
+async function buildTransactionInsertPayload(
+  trx: any,
+  payload: Record<string, any>,
+): Promise<Record<string, any>> {
+  const columns = await getTransactionColumnSupport(trx);
+  const result = { ...payload };
+  if (!columns.currency_code) delete result.currency_code;
+  if (!columns.total_amount_currency) delete result.total_amount_currency;
+  if (!columns.fx_rate_usd_idr) delete result.fx_rate_usd_idr;
+  return result;
+}
 
 // Helper: attach items to transactions
 async function attachItems(txs: any[]) {
@@ -178,7 +208,7 @@ export const paymentsService = {
         if (!legacyOk && !idrOk) throw new ValidationError('Total amount mismatch');
       }
 
-      const [tx] = await trx('transactions').insert({
+      const txPayload = await buildTransactionInsertPayload(trx, {
         id: uuidv4(),
         user_id: userId,
         total_amount: pricing.totalUsd,
@@ -187,7 +217,9 @@ export const paymentsService = {
         fx_rate_usd_idr: fxRateUsdIdr,
         proof_url: input.proofUrl,
         status: 'pending',
-      }).returning('*');
+      });
+
+      const [tx] = await trx('transactions').insert(txPayload).returning('*');
 
       const itemPayload = itemsWithCurrency.map(i => ({
         id: uuidv4(),
@@ -237,8 +269,7 @@ export const paymentsService = {
       const expiresAt = new Date(Date.now() + input.expiresInHours * 3600 * 1000);
       bniDebug('init_gateway', { gateway_trx_id: gatewayTrxId, billing_type: billingType, trx_amount: trxAmount, expires_at: expiresAt.toISOString() });
 
-      const [tx] = await trx('transactions')
-        .insert({
+      const txPayload = await buildTransactionInsertPayload(trx, {
           id: uuidv4(),
           user_id: userId,
           total_amount: pricing.totalUsd,
@@ -250,7 +281,10 @@ export const paymentsService = {
           gateway_trx_id: gatewayTrxId,
           billing_type: billingType,
           gateway_expires_at: expiresAt,
-        })
+        });
+
+      const [tx] = await trx('transactions')
+        .insert(txPayload)
         .returning('*');
       bniDebug('db_tx_created', { tx_id: tx.id, gateway_trx_id: gatewayTrxId, status: tx.status });
 
