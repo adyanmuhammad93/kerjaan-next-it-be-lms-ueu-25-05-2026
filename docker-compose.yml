@@ -1,0 +1,74 @@
+version: '3.8'
+
+services:
+  # ─── PostgreSQL ───────────────────────────────────────────
+  db:
+    image: postgres:16-alpine
+    container_name: lms-db
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Jakarta
+      POSTGRES_DB: ${DB_NAME:-db_lms_ueu}
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme_in_production}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - lms-network
+
+  # ─── Backend API ──────────────────────────────────────────
+  backend:
+    image: ${BACKEND_IMAGE:-registry.gitlab.com/next-it-projects/lms/backend:latest}
+    container_name: lms-backend
+    restart: unless-stopped
+    env_file:
+      - .env.production
+    environment:
+      TZ: Asia/Jakarta
+    ports:
+      - "127.0.0.1:3004:3004"
+    volumes:
+      - uploads:/app/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - lms-network
+
+  # ─── Frontend (Nginx) ────────────────────────────────────
+  frontend:
+    image: ${FRONTEND_IMAGE:-registry.gitlab.com/next-it-projects/lms/frontend:latest}
+    container_name: lms-frontend
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3080:80"
+    networks:
+      - lms-network
+
+  # ─── MailHog (dev email catcher) ──────────────────────────
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: lms-mailhog
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:1025:1025"   # SMTP
+      - "127.0.0.1:8025:8025"   # Web UI
+    networks:
+      - lms-network
+
+volumes:
+  pgdata:
+    driver: local
+  uploads:
+    driver: local
+
+networks:
+  lms-network:
+    driver: bridge
